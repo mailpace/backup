@@ -29,7 +29,7 @@ Gem::Specification.new do |gem|
 
   gem.add_dependency "thor", "~> 1.0"
   gem.add_dependency "open4", "1.3.0"
-  gem.add_dependency "fog", "~> 1.42"
+  gem.add_dependency "fog", "~> 1.45"
   gem.add_dependency "excon", "~> 0.71"
   gem.add_dependency "unf", "~>0.1.4" # for fog/AWS
   gem.add_dependency "dropbox-sdk", "1.6.5"
@@ -38,7 +38,6 @@ Gem::Specification.new do |gem|
   gem.add_dependency "net-sftp", "2.1.2"
   gem.add_dependency "mail", "~> 2.6", ">= 2.6.6"
   gem.add_dependency "pagerduty", "2.0.0"
-  gem.add_dependency "twitter", "~> 6.0"
   gem.add_dependency "hipchat", "1.0.1"
   gem.add_dependency "flowdock", "0.4.0"
   gem.add_dependency "dogapi", "1.40.0"
