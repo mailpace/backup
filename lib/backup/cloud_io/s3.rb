@@ -1,5 +1,5 @@
 require "backup/cloud_io/base"
-require "fog"
+require "aws-sdk-s3"
 require "digest/md5"
 require "base64"
 require "stringio"
@@ -7,156 +7,135 @@ require "stringio"
 module Backup
   module CloudIO
     class S3 < Base
-      class Error < Backup::Error; end
-
       MAX_FILE_SIZE       = 1024**3 * 5   # 5 GiB
-      MAX_MULTIPART_SIZE  = 1024**4 * 5   # 5 TiB
+      MAX_MULTIPART_SIZE  = 1024**4 * 5   # 5 TiB      
 
-      attr_reader :access_key_id, :secret_access_key, :use_iam_profile,
-        :region, :bucket, :chunk_size, :encryption, :storage_class,
-        :fog_options
+      def initialize(bucket:, region:, access_key_id:, secret_access_key:, use_iam_profile:, chunk_size:, custom_endpoint:)
+        Logger.info "Custom endpoint in cloud io: #{custom_endpoint}"
 
-      def initialize(options = {})
-        super
-
-        @access_key_id      = options[:access_key_id]
-        @secret_access_key  = options[:secret_access_key]
-        @use_iam_profile    = options[:use_iam_profile]
-        @region             = options[:region]
-        @bucket             = options[:bucket]
-        @chunk_size         = options[:chunk_size]
-        @encryption         = options[:encryption]
-        @storage_class      = options[:storage_class]
-        @fog_options        = options[:fog_options]
+        @bucket = bucket
+        @region = region
+        @access_key_id = access_key_id
+        @secret_access_key = secret_access_key
+        @use_iam_profile = use_iam_profile
+        @chunk_size = chunk_size
+        @custom_endpoint = custom_endpoint
       end
-
+    
       # The Syncer may call this method in multiple threads.
       # However, #objects is always called prior to multithreading.
       def upload(src, dest)
         file_size = File.size(src)
-        chunk_bytes = chunk_size * 1024**2
+        chunk_bytes = @chunk_size * 1024**2
+    
         if chunk_bytes > 0 && file_size > chunk_bytes
-          raise FileSizeError, <<-EOS if file_size > MAX_MULTIPART_SIZE
-            File Too Large
-            File: #{src}
-            Size: #{file_size}
-            Max Multipart Upload Size is #{MAX_MULTIPART_SIZE} (5 TiB)
-          EOS
-
+          raise FileSizeError, "File Too Large\nFile: #{src}\nSize: #{file_size}\nMax Multipart Upload Size is #{MAX_MULTIPART_SIZE} (5 TiB)" if file_size > MAX_MULTIPART_SIZE
+    
           chunk_bytes = adjusted_chunk_bytes(chunk_bytes, file_size)
           upload_id = initiate_multipart(dest)
           parts = upload_parts(src, dest, upload_id, chunk_bytes, file_size)
           complete_multipart(dest, upload_id, parts)
         else
-          raise FileSizeError, <<-EOS if file_size > MAX_FILE_SIZE
-            File Too Large
-            File: #{src}
-            Size: #{file_size}
-            Max File Size is #{MAX_FILE_SIZE} (5 GiB)
-          EOS
-
+          raise FileSizeError, "File Too Large\nFile: #{src}\nSize: #{file_size}\nMax File Size is #{MAX_FILE_SIZE} (5 GiB)" if file_size > MAX_FILE_SIZE
+    
           put_object(src, dest)
         end
       end
-
+    
       # Returns all objects in the bucket with the given prefix.
       #
       # - #get_bucket returns a max of 1000 objects per request.
       # - Returns objects in alphabetical order.
       # - If marker is given, only objects after the marker are in the response.
       def objects(prefix)
+        s3 = s3_resource
+    
         objects = []
-        resp = nil
         prefix = prefix.chomp("/")
-        opts = { "prefix" => prefix + "/" }
-
-        while resp.nil? || resp.body["IsTruncated"]
-          opts["marker"] = objects.last.key unless objects.empty?
-          with_retries("GET '#{bucket}/#{prefix}/*'") do
-            resp = connection.get_bucket(bucket, opts)
-          end
-          resp.body["Contents"].each do |obj_data|
-            objects << Object.new(self, obj_data)
-          end
+        bucket = s3.bucket(@bucket)
+    
+        bucket.objects(prefix: prefix + "/").each do |s3_object|
+          objects << S3Object.new(self, s3_object.key, s3_object.etag, s3_object.storage_class)
         end
-
+    
         objects
       end
-
+    
       # Used by Object to fetch metadata if needed.
       def head_object(object)
-        resp = nil
-        with_retries("HEAD '#{bucket}/#{object.key}'") do
-          resp = connection.head_object(bucket, object.key)
-        end
-        resp
+        s3 = s3_resource
+        bucket = s3.bucket(@bucket)
+        s3_object = bucket.object(object.key)
+        s3_object.head
       end
-
+    
       # Delete object(s) from the bucket.
       #
       # - Called by the Storage (with objects) and the Syncer (with keys)
       # - Deletes 1000 objects per request.
       # - Missing objects will be ignored.
       def delete(objects_or_keys)
-        keys = Array(objects_or_keys).dup
-        keys.map!(&:key) if keys.first.is_a?(Object)
-
-        opts = { quiet: true } # only report Errors in DeleteResult
+        s3 = s3_resource
+        bucket = s3.bucket(@bucket)
+    
+        keys = Array(objects_or_keys).map { |obj| obj.is_a?(S3Object) ? obj.key : obj }
+    
         until keys.empty?
           keys_partial = keys.slice!(0, 1000)
-          with_retries("DELETE Multiple Objects") do
-            resp = connection.delete_multiple_objects(bucket, keys_partial, opts.dup)
-            unless resp.body["DeleteResult"].empty?
-              errors = resp.body["DeleteResult"].map do |result|
-                error = result["Error"]
-                "Failed to delete: #{error["Key"]}\n" \
-                  "Reason: #{error["Code"]}: #{error["Message"]}"
-              end.join("\n")
-              raise Error, "The server returned the following:\n#{errors}"
-            end
-          end
+          delete_objects(bucket, keys_partial)
         end
       end
-
+    
       private
 
-      def connection
-        @connection ||=
-          begin
-            opts = { provider: "AWS", region: region }
-            if use_iam_profile
-              opts[:use_iam_profile] = true
-            else
-              opts[:aws_access_key_id] = access_key_id
-              opts[:aws_secret_access_key] = secret_access_key
-            end
-            opts.merge!(fog_options || {})
-            conn = Fog::Storage.new(opts)
-            conn.sync_clock
-            conn
-          end
+      def s3_resource
+        options = {
+          region: @region,
+          access_key_id: @access_key_id,
+          secret_access_key: @secret_access_key,
+        }
+
+        Logger.info "access_key_id: #{@access_key_id}"
+        Logger.info "secret_access_key: #{@secret_access_key}"
+    
+        options[:endpoint] = @custom_endpoint if @custom_endpoint
+    
+        Aws::S3::Resource.new(options)
       end
 
+      def metadata
+        @metadata ||= begin
+          head_object = @s3.head_object(self)
+          head_object.respond_to?(:headers) ? head_object.headers : {}
+        end
+      end
+    
+      def delete_objects(bucket, keys)
+        bucket.objects.delete(keys: keys, quiet: true)
+      end
+    
       def put_object(src, dest)
+        s3 = s3_resource
+        bucket = s3.bucket(@bucket)
+    
         md5 = Base64.encode64(Digest::MD5.file(src).digest).chomp
-        options = headers.merge("Content-MD5" => md5)
-        with_retries("PUT '#{bucket}/#{dest}'") do
-          File.open(src, "r") do |file|
-            connection.put_object(bucket, dest, file, options)
-          end
+        options = { content_md5: md5 }
+    
+        File.open(src, "rb") do |file|
+          bucket.object(dest).put(body: file, content_md5: md5, **options)
         end
       end
-
+    
       def initiate_multipart(dest)
-        Logger.info "\s\sInitiate Multipart '#{bucket}/#{dest}'"
-
-        resp = nil
-        with_retries("POST '#{bucket}/#{dest}' (Initiate)") do
-          resp = connection.initiate_multipart_upload(bucket, dest, headers)
-        end
-        resp.body["UploadId"]
+        Logger.info "\s\sInitiate Multipart '#{@bucket}/#{dest}'"
+    
+        s3 = s3_resource
+        bucket = s3.bucket(@bucket)
+    
+        resp = bucket.object(dest).create_multipart_upload
+        resp.upload_id
       end
-
+    
       # Each part's MD5 is sent to verify the transfer.
       # AWS will concatenate all parts into a single object
       # once the multipart upload is completed.
@@ -164,57 +143,46 @@ module Backup
         total_parts = (file_size / chunk_bytes.to_f).ceil
         progress = (0.1..0.9).step(0.1).map { |n| (total_parts * n).floor }
         Logger.info "\s\sUploading #{total_parts} Parts..."
-
+    
+        s3 = s3_resource
+        bucket = s3.bucket(@bucket)
+    
         parts = []
-        File.open(src, "r") do |file|
+        File.open(src, "rb") do |file|
           part_number = 0
           while data = file.read(chunk_bytes)
             part_number += 1
             md5 = Base64.encode64(Digest::MD5.digest(data)).chomp
-
-            with_retries("PUT '#{bucket}/#{dest}' Part ##{part_number}") do
-              resp = connection.upload_part(
-                bucket, dest, upload_id, part_number, StringIO.new(data),
-                "Content-MD5" => md5
-              )
-              parts << resp.headers["ETag"]
-            end
-
+    
+            resp = bucket.object(dest).upload_part(
+              body: StringIO.new(data),
+              part_number: part_number,
+              upload_id: upload_id,
+              content_md5: md5
+            )
+            parts << resp.etag
+    
             if i = progress.rindex(part_number)
               Logger.info "\s\s...#{i + 1}0% Complete..."
             end
           end
         end
+    
         parts
       end
-
+    
       def complete_multipart(dest, upload_id, parts)
-        Logger.info "\s\sComplete Multipart '#{bucket}/#{dest}'"
-
-        with_retries("POST '#{bucket}/#{dest}' (Complete)") do
-          resp = connection.complete_multipart_upload(bucket, dest, upload_id, parts)
-          raise Error, <<-EOS if resp.body["Code"]
-            The server returned the following error:
-            #{resp.body["Code"]}: #{resp.body["Message"]}
-          EOS
-        end
+        Logger.info "\s\sComplete Multipart '#{@bucket}/#{dest}'"
+    
+        s3 = s3_resource
+        bucket = s3.bucket(@bucket)
+    
+        bucket.object(dest).complete_multipart_upload(upload_id: upload_id, multipart_upload: { parts: parts })
       end
-
-      def headers
-        headers = {}
-
-        enc = encryption.to_s.upcase
-        headers["x-amz-server-side-encryption"] = enc unless enc.empty?
-
-        sc = storage_class.to_s.upcase
-        headers["x-amz-storage-class"] = sc unless sc.empty? || sc == "STANDARD"
-
-        headers
-      end
-
+       
       def adjusted_chunk_bytes(chunk_bytes, file_size)
         return chunk_bytes if file_size / chunk_bytes.to_f <= 10_000
-
+    
         mb = orig_mb = chunk_bytes / 1024**2
         mb += 1 until file_size / (1024**2 * mb).to_f <= 10_000
         Logger.warn Error.new(<<-EOS)
@@ -226,26 +194,21 @@ module Backup
         EOS
         1024**2 * mb
       end
-
-      class Object
+    
+      class S3Object
         attr_reader :key, :etag, :storage_class
-
-        def initialize(cloud_io, data)
-          @cloud_io = cloud_io
-          @key  = data["Key"]
-          @etag = data["ETag"]
-          @storage_class = data["StorageClass"]
-        end
-
-        # currently 'AES256' or nil
-        def encryption
-          metadata["x-amz-server-side-encryption"]
+    
+        def initialize(s3_uploader, key, etag, storage_class)
+          @s3_uploader = s3_uploader
+          @key = key
+          @etag = etag
+          @storage_class = storage_class
         end
 
         private
 
         def metadata
-          @metadata ||= @cloud_io.head_object(self).headers
+          @metadata ||= @s3_uploader.head_object(self).headers
         end
       end
     end

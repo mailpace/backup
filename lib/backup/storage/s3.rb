@@ -68,6 +68,9 @@ module Backup
       # e.g. Fog::Storage.new({ :provider => 'AWS' }.merge(fog_options))
       attr_accessor :fog_options
 
+      # Custom endpoint for S3-compatible services
+      attr_accessor :custom_endpoint
+
       def initialize(model, storage_id = nil)
         super
 
@@ -85,18 +88,16 @@ module Backup
       private
 
       def cloud_io
+        Logger.info "Custom endpoint in storage: #{custom_endpoint}"
+
         @cloud_io ||= CloudIO::S3.new(
           access_key_id: access_key_id,
           secret_access_key: secret_access_key,
           use_iam_profile: use_iam_profile,
           region: region,
           bucket: bucket,
-          encryption: encryption,
-          storage_class: storage_class,
-          max_retries: max_retries,
-          retry_waitsec: retry_waitsec,
           chunk_size: chunk_size,
-          fog_options: fog_options
+          custom_endpoint: custom_endpoint
         )
       end
 

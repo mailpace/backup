@@ -50,4 +50,6 @@ Gem::Specification.new do |gem|
   gem.add_development_dependency "rake"
   gem.add_development_dependency "rspec", "3.8.0"
   gem.add_development_dependency "timecop", "0.9.1"
+
+  gem.add_dependency "aws-sdk-s3", "1.141.0"
 end
