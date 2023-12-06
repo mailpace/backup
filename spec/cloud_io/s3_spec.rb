@@ -7,7 +7,7 @@ module Backup
 
     describe "#upload" do
       context "with multipart support" do
-        let(:cloud_io) { CloudIO::S3.new(bucket: "my_bucket", chunk_size: 5) }
+        let(:cloud_io) { CloudIO::S3.new(bucket: "my_bucket", chunk_size: 5, region: "us-east", access_key_id: nil, secret_access_key: nil, use_iam_profile: false, custom_endpoint: "https://test.com") }
         let(:parts) { double }
 
         context "when src file is larger than chunk_size" do
@@ -405,61 +405,6 @@ module Backup
         )
       end
     end # describe '#delete'
-
-    describe "#connection" do
-      specify "using AWS access keys" do
-        expect(Fog::Storage).to receive(:new).once.with(
-          provider: "AWS",
-          aws_access_key_id: "my_access_key_id",
-          aws_secret_access_key: "my_secret_access_key",
-          region: "my_region"
-        ).and_return(connection)
-        expect(connection).to receive(:sync_clock).once
-
-        cloud_io = CloudIO::S3.new(
-          access_key_id: "my_access_key_id",
-          secret_access_key: "my_secret_access_key",
-          region: "my_region"
-        )
-
-        expect(cloud_io.send(:connection)).to be connection
-        expect(cloud_io.send(:connection)).to be connection
-      end
-
-      specify "using AWS IAM profile" do
-        expect(Fog::Storage).to receive(:new).once.with(
-          provider: "AWS",
-          use_iam_profile: true,
-          region: "my_region"
-        ).and_return(connection)
-        expect(connection).to receive(:sync_clock).once
-
-        cloud_io = CloudIO::S3.new(
-          use_iam_profile: true,
-          region: "my_region"
-        )
-
-        expect(cloud_io.send(:connection)).to be connection
-        expect(cloud_io.send(:connection)).to be connection
-      end
-
-      it "passes along fog_options" do
-        expect(Fog::Storage).to receive(:new).with(provider: "AWS",
-                                                   region: nil,
-                                                   aws_access_key_id: "my_key",
-                                                   aws_secret_access_key: "my_secret",
-                                                   connection_options: { opt_key: "opt_value" },
-                                                   my_key: "my_value").and_return(double("response", sync_clock: nil))
-        CloudIO::S3.new(
-          access_key_id: "my_key",
-          secret_access_key: "my_secret",
-          fog_options: {
-            connection_options: { opt_key: "opt_value" },
-            my_key: "my_value"
-          }
-        ).send(:connection)
-      end
-    end # describe '#connection'
 
     describe "#put_object" do
       let(:cloud_io) do

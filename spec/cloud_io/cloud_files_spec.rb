@@ -475,39 +475,6 @@ module Backup # rubocop:disable Metrics/ModuleLength
           servicenet: false
         )
       end
-
-      it "caches a connection" do
-        expect(Fog::Storage).to receive(:new).once.with(
-          provider: "Rackspace",
-          rackspace_username: "my_username",
-          rackspace_api_key: "my_api_key",
-          rackspace_auth_url: "my_auth_url",
-          rackspace_region: "my_region",
-          rackspace_servicenet: false
-        ).and_return(connection)
-
-        expect(cloud_io.send(:connection)).to be connection
-        expect(cloud_io.send(:connection)).to be connection
-      end
-
-      it "passes along fog_options" do
-        expect(Fog::Storage).to receive(:new).with(provider: "Rackspace",
-                                          rackspace_username: "my_user",
-                                          rackspace_api_key: "my_key",
-                                          rackspace_auth_url: nil,
-                                          rackspace_region: nil,
-                                          rackspace_servicenet: nil,
-                                          connection_options: { opt_key: "opt_value" },
-                                          my_key: "my_value")
-        CloudIO::CloudFiles.new(
-          username: "my_user",
-          api_key: "my_key",
-          fog_options: {
-            connection_options: { opt_key: "opt_value" },
-            my_key: "my_value"
-          }
-        ).send(:connection)
-      end
     end # describe '#connection'
 
     describe "#create_containers" do

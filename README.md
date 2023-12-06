@@ -1,3 +1,6 @@
+This is a stripped down version of Backup that supports using alternative providers for S3 hosting (e.g. https://tebi.io/).
+
+
 Backup
 ======
 
