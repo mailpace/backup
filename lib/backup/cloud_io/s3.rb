@@ -11,8 +11,6 @@ module Backup
       MAX_MULTIPART_SIZE  = 1024**4 * 5   # 5 TiB      
 
       def initialize(bucket:, region:, access_key_id:, secret_access_key:, use_iam_profile:, chunk_size:, custom_endpoint:)
-        Logger.info "Custom endpoint in cloud io: #{custom_endpoint}"
-
         @bucket = bucket
         @region = region
         @access_key_id = access_key_id
@@ -88,9 +86,6 @@ module Backup
           access_key_id: @access_key_id,
           secret_access_key: @secret_access_key,
         }
-
-        Logger.info "access_key_id: #{@access_key_id}"
-        Logger.info "secret_access_key: #{@secret_access_key}"
     
         options[:endpoint] = @custom_endpoint if @custom_endpoint
     
