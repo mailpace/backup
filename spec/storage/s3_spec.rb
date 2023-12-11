@@ -54,7 +54,6 @@ module Backup
         expect(storage.retry_waitsec).to be 30
         expect(storage.encryption).to be_nil
         expect(storage.storage_class).to be :standard
-        expect(storage.fog_options).to be_nil
       end
 
       it "configures the storage" do
@@ -70,7 +69,6 @@ module Backup
           s3.retry_waitsec      = 60
           s3.encryption         = "aes256"
           s3.storage_class      = :reduced_redundancy
-          s3.fog_options        = { my_key: "my_value" }
         end
 
         expect(storage.storage_id).to eq "my_id"
@@ -86,7 +84,6 @@ module Backup
         expect(storage.retry_waitsec).to be 60
         expect(storage.encryption).to eq "aes256"
         expect(storage.storage_class).to eq :reduced_redundancy
-        expect(storage.fog_options).to eq my_key: "my_value"
       end
 
       it "configures the storage with values passed as frozen strings" do
@@ -97,7 +94,6 @@ module Backup
           s3.region             = "my_region".freeze
           s3.path               = "my/path".freeze
           s3.encryption         = "aes256".freeze
-          s3.fog_options        = { my_key: "my_value".freeze }
         end
 
         expect(storage.storage_id).to eq "my_id"
@@ -107,7 +103,6 @@ module Backup
         expect(storage.region).to eq "my_region"
         expect(storage.path).to eq "my/path"
         expect(storage.encryption).to eq "aes256"
-        expect(storage.fog_options).to eq my_key: "my_value"
       end
 
       it "requires bucket" do
@@ -221,12 +216,8 @@ module Backup
           use_iam_profile: nil,
           region: nil,
           bucket: "my_bucket",
-          encryption: nil,
-          storage_class: :standard,
-          max_retries: 10,
-          retry_waitsec: 30,
-          chunk_size: 5,
-          fog_options: nil
+          custom_endpoint: nil,
+          chunk_size: 5
         ).and_return(:cloud_io)
 
         storage = Storage::S3.new(model, &required_config)
@@ -242,12 +233,8 @@ module Backup
           use_iam_profile: true,
           region: nil,
           bucket: "my_bucket",
-          encryption: nil,
-          storage_class: :standard,
-          max_retries: 10,
-          retry_waitsec: 30,
-          chunk_size: 5,
-          fog_options: nil
+          custom_endpoint: nil,
+          chunk_size: 5
         ).and_return(:cloud_io)
 
         storage = Storage::S3.new(model, &required_iam_config)
